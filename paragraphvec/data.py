@@ -3,38 +3,81 @@ import os
 import re
 import signal
 from math import ceil
-from os.path import join
 
 import numpy as np
 import torch
 from numpy.random import choice
-from torchtext.data import Field, TabularDataset
+
+import numpy as np
+from collections import Counter
+from torch.utils.data import Dataset
 
 from paragraphvec.utils import DATA_DIR
 
 
-def load_dataset(file_name):
+class CustomDataset(Dataset):
+
+    def __init__(self, file_path:str):
+    
+        self.counter = Counter()
+        self.examples = []
+        self.vocab = dict()
+        self.vocab_size = 0
+    
+        with open(file_path, 'r', encoding='utf-8') as f:
+            next(f)  # Skip header
+    
+            for line in f:
+                text = line.strip()
+                tokens = _tokenize_str(text)
+                
+                self.examples.append(tokens)
+    
+        self.build_vocab()
+
+    
+    def build_vocab(self):
+
+        for tokens in self.examples:
+            self.counter.update(tokens)
+        
+        self.vocab = {word: idx for idx, word in enumerate(self.counter.keys())}
+        self.vocab_size = len(self.vocab)
+        
+        #self.stoi = self.vocab  # string to index mapping
+        #self.itos = {idx: word for word, idx in self.vocab.items()}  # index to string mapping
+
+    
+    def __len__(self):
+        return len(self.examples)
+
+    
+    def __getitem__(self, idx):
+    
+        tokens = self.examples[idx]
+        token_ids = [self.vocab[token] for token in tokens if token in self.vocab]
+    
+        return token_ids
+
+
+def load_dataset(file_name:str):
     """Loads contents from a file in the *data* directory into a
     torchtext.data.TabularDataset instance.
     """
-    file_path = join(DATA_DIR, file_name)
-    text_field = Field(pad_token=None, tokenize=_tokenize_str)
+    file_path = os.path.join(DATA_DIR, file_name)
+    dataset = CustomDataset(file_path)
 
-    dataset = TabularDataset(
-        path=file_path,
-        format='csv',
-        fields=[('text', text_field)],
-        skip_header=True)
-
-    text_field.build_vocab(dataset)
     return dataset
 
 
 def _tokenize_str(str_):
+    
     # keep only alphanumeric and punctations
     str_ = re.sub(r'[^A-Za-z0-9(),.!?\'`]', ' ', str_)
+    
     # remove multiple whitespace characters
     str_ = re.sub(r'\s{2,}', ' ', str_)
+    
     # punctations to tokens
     str_ = re.sub(r'\(', ' ( ', str_)
     str_ = re.sub(r'\)', ' ) ', str_)
@@ -42,6 +85,7 @@ def _tokenize_str(str_):
     str_ = re.sub(r'\.', ' . ', str_)
     str_ = re.sub(r'!', ' ! ', str_)
     str_ = re.sub(r'\?', ' ? ', str_)
+    
     # split contractions into multiple tokens
     str_ = re.sub(r'\'s', ' \'s', str_)
     str_ = re.sub(r'\'ve', ' \'ve', str_)
@@ -49,6 +93,7 @@ def _tokenize_str(str_):
     str_ = re.sub(r'\'re', ' \'re', str_)
     str_ = re.sub(r'\'d', ' \'d', str_)
     str_ = re.sub(r'\'ll', ' \'ll', str_)
+    
     # lower case
     return str_.strip().lower().split()
 
@@ -164,43 +209,54 @@ class _NCEGenerator(object):
 
     For other parameters see the NCEData class.
     """
-    def __init__(self, dataset, batch_size, context_size,
-                 num_noise_words, state):
+    def __init__(self, dataset, batch_size, context_size, num_noise_words, state):
+
         self.dataset = dataset
         self.batch_size = batch_size
         self.context_size = context_size
         self.num_noise_words = num_noise_words
 
-        self._vocabulary = self.dataset.fields['text'].vocab
-        self._sample_noise = None
+        self._vocabulary = self.dataset.vocab
+        self._vocab_size = self.dataset.vocab_size
         self._init_noise_distribution()
         self._state = state
 
+    
     def _init_noise_distribution(self):
         # we use a unigram distribution raised to the 3/4rd power,
         # as proposed by T. Mikolov et al. in Distributed Representations
         # of Words and Phrases and their Compositionality
-        probs = np.zeros(len(self._vocabulary) - 1)
+        freqs = np.zeros(self._vocab_size)
 
-        for word, freq in self._vocabulary.freqs.items():
-            probs[self._word_to_index(word)] = freq
+        for word, freq in self.dataset.counter.items():
+            idx = self._word_to_index(word)
+            freqs[idx] = freq
 
-        probs = np.power(probs, 0.75)
+        probs = np.power(freqs, 0.75)
         probs /= np.sum(probs)
+        self._noise_distribution = probs
 
-        self._sample_noise = lambda: choice(
-            probs.shape[0], self.num_noise_words, p=probs).tolist()
+
+    def _sample_noise(self):
+        
+        return choice(
+            self._vocab_size, self.num_noise_words, p=self._noise_distribution
+            ).tolist()
+        
 
     def __len__(self):
-        num_examples = sum(self._num_examples_in_doc(d) for d in self.dataset)
+        num_examples = sum(self._num_examples_in_doc(i) for i in range(len(self.dataset)))
         return ceil(num_examples / self.batch_size)
 
+
     def vocabulary_size(self):
-        return len(self._vocabulary) - 1
+        return self._vocab_size
+    
 
     def next(self):
         """Updates state for the next process in a process-safe manner
         and generates the current batch."""
+
         prev_doc_id, prev_in_doc_pos = self._state.update_state(
             self.dataset,
             self.batch_size,
@@ -212,63 +268,76 @@ class _NCEGenerator(object):
 
         while len(batch) < self.batch_size:
             if prev_doc_id == len(self.dataset):
-                # last document exhausted
                 batch.torch_()
                 return batch
-            if prev_in_doc_pos <= (len(self.dataset[prev_doc_id].text) - 1
-                                   - self.context_size):
-                # more examples in the current document
+        
+            tokens = self.dataset.examples[prev_doc_id]
+        
+            if prev_in_doc_pos <= (len(tokens) - 1 - self.context_size):
                 self._add_example_to_batch(prev_doc_id, prev_in_doc_pos, batch)
                 prev_in_doc_pos += 1
             else:
-                # go to the next document
                 prev_doc_id += 1
                 prev_in_doc_pos = self.context_size
 
         batch.torch_()
         return batch
 
-    def _num_examples_in_doc(self, doc, in_doc_pos=None):
+
+    def _num_examples_in_doc(self, doc_id=0, in_doc_pos=None):
+    
+        tokens = self.dataset.examples[doc_id]
+    
         if in_doc_pos is not None:
-            # number of remaining
-            if len(doc.text) - in_doc_pos >= self.context_size + 1:
-                return len(doc.text) - in_doc_pos - self.context_size
+            if len(tokens) - in_doc_pos >= self.context_size + 1:
+                return len(tokens) - in_doc_pos - self.context_size
+    
             return 0
 
-        if len(doc.text) >= 2 * self.context_size + 1:
-            # total number
-            return len(doc.text) - 2 * self.context_size
+        if len(tokens) >= 2 * self.context_size + 1:
+            return len(tokens) - 2 * self.context_size
+    
         return 0
+    
 
     def _add_example_to_batch(self, doc_id, in_doc_pos, batch):
-        doc = self.dataset[doc_id].text
+        
+        tokens = self.dataset.examples[doc_id]
         batch.doc_ids.append(doc_id)
 
-        # sample from the noise distribution
+        # Sample from the noise distribution
         current_noise = self._sample_noise()
-        current_noise.insert(0, self._word_to_index(doc[in_doc_pos]))
+        target_word = tokens[in_doc_pos]
+        current_noise.insert(0, self._word_to_index(target_word))
         batch.target_noise_ids.append(current_noise)
 
         if self.context_size == 0:
             return
 
         current_context = []
-        context_indices = (in_doc_pos + diff for diff in
-                           range(-self.context_size, self.context_size + 1)
-                           if diff != 0)
+        context_indices = (
+            in_doc_pos + diff for diff in
+            range(-self.context_size, self.context_size + 1)
+            if diff != 0
+        )
 
         for i in context_indices:
-            context_id = self._word_to_index(doc[i])
+            context_word = tokens[i]
+            context_id = self._word_to_index(context_word)
             current_context.append(context_id)
+        
         batch.context_ids.append(current_context)
 
+
     def _word_to_index(self, word):
-        return self._vocabulary.stoi[word] - 1
+        return self._vocabulary[word]
+    
 
 
 class _NCEGeneratorState(object):
     """Batch generator state that is represented with a document id and
     in-document position. It abstracts a process-safe indexing mechanism."""
+    
     def __init__(self, context_size):
         # use raw values because both indices have
         # to manually be locked together
@@ -276,21 +345,23 @@ class _NCEGeneratorState(object):
         self._in_doc_pos = multiprocessing.RawValue('i', context_size)
         self._lock = multiprocessing.Lock()
 
-    def update_state(self, dataset, batch_size,
-                     context_size, num_examples_in_doc):
-        """Returns current indices and computes new indices for the
-        next process."""
+    
+    def update_state(self, dataset, batch_size, context_size, num_examples_in_doc):
+        """Returns current indices and computes new indices for the next process."""
+
         with self._lock:
             doc_id = self._doc_id.value
             in_doc_pos = self._in_doc_pos.value
-            self._advance_indices(
-                dataset, batch_size, context_size, num_examples_in_doc)
+            self._advance_indices(dataset, batch_size, context_size, num_examples_in_doc)
+            
             return doc_id, in_doc_pos
 
-    def _advance_indices(self, dataset, batch_size,
-                         context_size, num_examples_in_doc):
-        num_examples = num_examples_in_doc(
-            dataset[self._doc_id.value], self._in_doc_pos.value)
+
+    def _advance_indices(self, dataset, batch_size, context_size, num_examples_in_doc):
+
+        doc_id = self._doc_id.value
+        in_doc_pos = self._in_doc_pos.value
+        num_examples = num_examples_in_doc(doc_id, in_doc_pos)
 
         if num_examples > batch_size:
             # more examples in the current document
@@ -314,31 +385,47 @@ class _NCEGeneratorState(object):
                 return
 
             self._doc_id.value += 1
-            num_examples += num_examples_in_doc(
-                dataset[self._doc_id.value])
+            num_examples += num_examples_in_doc(self._doc_id.value)
 
-        self._in_doc_pos.value = (len(dataset[self._doc_id.value].text)
-                                  - context_size
-                                  - (num_examples - batch_size))
+        sent_len = len(dataset[self._doc_id.value])
+        x = (num_examples - batch_size)        
+        self._in_doc_pos.value = sent_len - context_size - x
 
 
 class _NCEBatch(object):
+
     def __init__(self, context_size):
+    
         self.context_ids = [] if context_size > 0 else None
         self.doc_ids = []
         self.target_noise_ids = []
 
+    
     def __len__(self):
         return len(self.doc_ids)
 
+    
     def torch_(self):
+    
         if self.context_ids is not None:
             self.context_ids = torch.LongTensor(self.context_ids)
+    
         self.doc_ids = torch.LongTensor(self.doc_ids)
         self.target_noise_ids = torch.LongTensor(self.target_noise_ids)
 
+    
     def cuda_(self):
+    
         if self.context_ids is not None:
             self.context_ids = self.context_ids.cuda()
+    
         self.doc_ids = self.doc_ids.cuda()
         self.target_noise_ids = self.target_noise_ids.cuda()
+
+
+    def to(self, device):
+
+        if device.type == 'cuda':
+            self.cuda_()
+        else:
+            self.torch_()

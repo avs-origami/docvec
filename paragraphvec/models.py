@@ -16,17 +16,19 @@ class DM(nn.Module):
     num_words: int
         Number of distinct words in a daset (i.e. vocabulary size).
     """
+
     def __init__(self, vec_dim, num_docs, num_words):
         super(DM, self).__init__()
+    
         # paragraph matrix
-        self._D = nn.Parameter(
-            torch.randn(num_docs, vec_dim), requires_grad=True)
+        self._D = nn.Parameter(torch.randn(num_docs, vec_dim), requires_grad=True)
+        
         # word matrix
-        self._W = nn.Parameter(
-            torch.randn(num_words, vec_dim), requires_grad=True)
+        self._W = nn.Parameter(torch.randn(num_words, vec_dim), requires_grad=True)
+        
         # output layer parameters
-        self._O = nn.Parameter(
-            torch.FloatTensor(vec_dim, num_words).zero_(), requires_grad=True)
+        self._O = nn.Parameter(torch.FloatTensor(vec_dim, num_words).zero_(), requires_grad=True)
+    
 
     def forward(self, context_ids, doc_ids, target_noise_ids):
         """Sparse computation of scores (unnormalized log probabilities)
@@ -49,16 +51,21 @@ class DM(nn.Module):
         -------
             autograd.Variable of size (batch_size, num_noise_words + 1)
         """
-        # combine a paragraph vector with word vectors of
-        # input (context) words
-        x = torch.add(
-            self._D[doc_ids, :], torch.sum(self._W[context_ids, :], dim=1))
 
-        # sparse computation of scores (unnormalized log probabilities)
-        # for negative sampling
-        return torch.bmm(
+        # combine a paragraph vector with word vectors of input (context) words
+        x = torch.add(
+            self._D[doc_ids, :],
+            torch.sum(self._W[context_ids, :], dim=1)
+        )
+
+        # sparse computation of scores (unnormalized log probabilities) for negative sampling
+        scores = torch.bmm(
             x.unsqueeze(1),
-            self._O[:, target_noise_ids].permute(1, 0, 2)).squeeze()
+            self._O[:, target_noise_ids].permute(1, 0, 2)
+        )
+        
+        return scores.squeeze(1)
+    
 
     def get_paragraph_vector(self, index):
         return self._D[index, :].data.tolist()
@@ -107,9 +114,12 @@ class DBOW(nn.Module):
         """
         # sparse computation of scores (unnormalized log probabilities)
         # for negative sampling
-        return torch.bmm(
+        scores = torch.bmm(
             self._D[doc_ids, :].unsqueeze(1),
             self._O[:, target_noise_ids].permute(1, 0, 2)).squeeze()
+        
+        return scores.squeeze(1)
+    
 
     def get_paragraph_vector(self, index):
         return self._D[index, :].data.tolist()

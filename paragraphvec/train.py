@@ -1,5 +1,5 @@
+import sys
 import time
-from sys import float_info, stdout
 
 import fire
 import torch
@@ -11,19 +11,19 @@ from paragraphvec.models import DM, DBOW
 from paragraphvec.utils import save_training_state
 
 
-def start(data_file_name,
-          num_noise_words,
-          vec_dim,
-          num_epochs,
-          batch_size,
-          lr,
-          model_ver='dbow',
-          context_size=0,
-          vec_combine_method='sum',
-          save_all=False,
-          generate_plot=True,
-          max_generated_batches=5,
-          num_workers=1):
+def start(data_file_name="",
+        num_noise_words=1,
+        vec_dim=100,
+        num_epochs=10,
+        batch_size=1,
+        lr=1e-3,
+        model_ver='dm',
+        context_size=2,
+        vec_combine_method='concat',
+        save_all=False,
+        generate_plot=True,
+        max_generated_batches=5,
+        num_workers=1):
     """Trains a new model. The latest checkpoint and the best performing
     model are saved in the *models* directory.
 
@@ -78,6 +78,7 @@ def start(data_file_name,
         Number of batch generator jobs to run in parallel. If value is set
         to -1 number of machine cores are used.
     """
+
     if model_ver not in ('dm', 'dbow'):
         raise ValueError("Invalid version of the model")
 
@@ -85,6 +86,7 @@ def start(data_file_name,
 
     if model_ver_is_dbow and context_size != 0:
         raise ValueError("Context size has to be zero when using dbow")
+    
     if not model_ver_is_dbow:
         if vec_combine_method not in ('sum', 'concat'):
             raise ValueError("Invalid method for combining paragraph and word "
@@ -100,6 +102,7 @@ def start(data_file_name,
         num_noise_words,
         max_generated_batches,
         num_workers)
+    
     nce_data.start()
 
     try:
@@ -137,38 +140,43 @@ def _run(data_file_name,
     optimizer = Adam(params=model.parameters(), lr=lr)
 
     if torch.cuda.is_available():
-        model.cuda()
-
-    print("Dataset comprised of {:d} documents.".format(len(dataset)))
-    print("Vocabulary size is {:d}.\n".format(vocabulary_size))
-    print("Training started.")
+        device = torch.device("cuda")
+        print("GPU training enabled.")
+    else:
+        device = torch.device("cpu")
+        print("CPU training enabled.")
+    
+    print(f"Dataset comprised of {len(dataset)} documents.")
+    print(f"Vocabulary size is {vocabulary_size}.\n")
+    print(f"Num Batches: {num_batches}")
 
     best_loss = float("inf")
     prev_model_file_path = None
+    model.to(device)
 
+    print("Training started.")
     for epoch_i in range(num_epochs):
         epoch_start_time = time.time()
         loss = []
 
         for batch_i in range(num_batches):
             batch = next(data_generator)
-            if torch.cuda.is_available():
-                batch.cuda_()
+            batch.to(device)
 
             if model_ver_is_dbow:
                 x = model.forward(batch.doc_ids, batch.target_noise_ids)
             else:
-                x = model.forward(
-                    batch.context_ids,
-                    batch.doc_ids,
-                    batch.target_noise_ids)
+                x = model.forward(batch.context_ids, batch.doc_ids, batch.target_noise_ids)
 
             x = cost_func.forward(x)
 
             loss.append(x.item())
             model.zero_grad()
+            
+            # backpropagation
             x.backward()
             optimizer.step()
+            
             _print_progress(epoch_i, batch_i, num_batches)
 
         # end of epoch
@@ -205,11 +213,10 @@ def _run(data_file_name,
         print(" ({:d}s) - loss: {:.4f}".format(epoch_total_time, loss))
 
 
-def _print_progress(epoch_i, batch_i, num_batches):
+def _print_progress(epoch_i:int, batch_i:int, num_batches:int):
+
     progress = round((batch_i + 1) / num_batches * 100)
-    print("\rEpoch {:d}".format(epoch_i + 1), end='')
-    stdout.write(" - {:d}%".format(progress))
-    stdout.flush()
+    print(f"\rEpoch {epoch_i + 1:d} - {progress:d}%", end='', file=sys.stdout, flush=True)
 
 
 if __name__ == '__main__':

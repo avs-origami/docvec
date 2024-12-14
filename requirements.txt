@@ -13,6 +13,5 @@ pytz
 PyYAML
 requests
 six
-torchtext
 tqdm
 urllib3
