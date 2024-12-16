@@ -7,13 +7,13 @@ class DM(nn.Module):
 
     Parameters
     ----------
-    vec_dim: int
+    `vec_dim`: int
         Dimensionality of vectors to be learned (for paragraphs and words).
 
-    num_docs: int
+    `num_docs`: int
         Number of documents in a dataset.
 
-    num_words: int
+    `num_words`: int
         Number of distinct words in a daset (i.e. vocabulary size).
     """
 
@@ -36,13 +36,13 @@ class DM(nn.Module):
 
         Parameters
         ----------
-        context_ids: torch.Tensor of size (batch_size, num_context_words)
+        `context_ids`: torch.Tensor of size (batch_size, num_context_words)
             Vocabulary indices of context words.
 
-        doc_ids: torch.Tensor of size (batch_size,)
+        `doc_ids`: torch.Tensor of size (batch_size,)
             Document indices of paragraphs.
 
-        target_noise_ids: torch.Tensor of size (batch_size, num_noise_words + 1)
+        `target_noise_ids`: torch.Tensor of size (batch_size, num_noise_words + 1)
             Vocabulary indices of target and noise words. The first element in
             each row is the ground truth index (i.e. the target), other
             elements are indices of samples from the noise distribution.
@@ -52,17 +52,11 @@ class DM(nn.Module):
             autograd.Variable of size (batch_size, num_noise_words + 1)
         """
 
-        # combine a paragraph vector with word vectors of input (context) words
-        x = torch.add(
-            self._D[doc_ids, :],
-            torch.sum(self._W[context_ids, :], dim=1)
-        )
+        # combine a paragraph vector with sum of word vectors of input (context) words
+        x = torch.add(self._D[doc_ids, :], torch.sum(self._W[context_ids, :], dim=1))
 
         # sparse computation of scores (unnormalized log probabilities) for negative sampling
-        scores = torch.bmm(
-            x.unsqueeze(1),
-            self._O[:, target_noise_ids].permute(1, 0, 2)
-        )
+        scores = torch.bmm(x.unsqueeze(1), self._O[:, target_noise_ids].permute(1, 0, 2))
         
         return scores.squeeze(1)
     
