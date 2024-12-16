@@ -5,7 +5,7 @@ from os.path import join
 import fire
 import torch
 
-from paragraphvec.data import load_dataset
+from paragraphvec.data import LoadDataset
 from paragraphvec.models import DM, DBOW
 from paragraphvec.utils import DATA_DIR, MODELS_DIR
 
@@ -22,7 +22,7 @@ def start(data_file_name, model_file_name):
         Name of a file in the *models* directory (a model trained on
         the *data_file_name* dataset).
     """
-    dataset = load_dataset(data_file_name)
+    dataset = LoadDataset(data_file_name)
 
     vec_dim = int(re.search('_vecdim\.(\d+)_', model_file_name).group(1))
 
@@ -36,10 +36,10 @@ def start(data_file_name, model_file_name):
 
 
 def _load_model(model_file_name, vec_dim, num_docs, num_words):
+
     model_ver = re.search('_model\.(dm|dbow)', model_file_name).group(1)
-    if model_ver is None:
-        raise ValueError("Model file name contains an invalid"
-                         "version of the model")
+    if not model_ver:
+        raise ValueError("Model file name contains an invalid version of the model")
 
     model_file_path = join(MODELS_DIR, model_file_name)
 
