@@ -5,7 +5,7 @@ import fire
 import torch
 from torch.optim import Adam
 
-from paragraphvec.data import load_dataset, NCEData
+from paragraphvec.data import LoadDataset, NCEData
 from paragraphvec.loss import NegativeSampling
 from paragraphvec.models import DM, DBOW
 from paragraphvec.utils import save_training_state
@@ -13,9 +13,9 @@ from paragraphvec.utils import save_training_state
 
 def start(data_file_name="",
         num_noise_words=1,
-        vec_dim=100,
-        num_epochs=10,
-        batch_size=1,
+        vec_dim=10,
+        num_epochs=5,
+        batch_size=8,
         lr=1e-3,
         model_ver='dm',
         context_size=2,
@@ -23,7 +23,8 @@ def start(data_file_name="",
         save_all=False,
         generate_plot=True,
         max_generated_batches=5,
-        num_workers=1):
+        num_workers=1
+    ):
     """Trains a new model. The latest checkpoint and the best performing
     model are saved in the *models* directory.
 
@@ -83,26 +84,17 @@ def start(data_file_name="",
         raise ValueError("Invalid version of the model")
 
     model_ver_is_dbow = model_ver == 'dbow'
-
     if model_ver_is_dbow and context_size != 0:
         raise ValueError("Context size has to be zero when using dbow")
     
     if not model_ver_is_dbow:
         if vec_combine_method not in ('sum', 'concat'):
-            raise ValueError("Invalid method for combining paragraph and word "
-                             "vectors when using dm")
+            raise ValueError("Invalid method for combining paragraph and word vectors when using dm")
         if context_size <= 0:
             raise ValueError("Context size must be positive when using dm")
 
-    dataset = load_dataset(data_file_name)
-    nce_data = NCEData(
-        dataset,
-        batch_size,
-        context_size,
-        num_noise_words,
-        max_generated_batches,
-        num_workers)
-    
+    dataset = LoadDataset(data_file_name)
+    nce_data = NCEData(dataset, batch_size, context_size, num_noise_words, max_generated_batches, num_workers)
     nce_data.start()
 
     try:
@@ -114,22 +106,9 @@ def start(data_file_name="",
         nce_data.stop()
 
 
-def _run(data_file_name,
-         dataset,
-         data_generator,
-         num_batches,
-         vocabulary_size,
-         context_size,
-         num_noise_words,
-         vec_dim,
-         num_epochs,
-         batch_size,
-         lr,
-         model_ver,
-         vec_combine_method,
-         save_all,
-         generate_plot,
-         model_ver_is_dbow):
+def _run(data_file_name, dataset, data_generator, num_batches, vocabulary_size,
+         context_size, num_noise_words, vec_dim, num_epochs, batch_size, lr,
+         model_ver, vec_combine_method, save_all, generate_plot, model_ver_is_dbow):
 
     if model_ver_is_dbow:
         model = DBOW(vec_dim, num_docs=len(dataset), num_words=vocabulary_size)
@@ -146,9 +125,10 @@ def _run(data_file_name,
         device = torch.device("cpu")
         print("CPU training enabled.")
     
-    print(f"Dataset comprised of {len(dataset)} documents.")
-    print(f"Vocabulary size is {vocabulary_size}.\n")
-    print(f"Num Batches: {num_batches}")
+    print(f"Count of documents: {len(dataset)}.")
+    print(f"Unique words (vocab): {vocabulary_size}.")
+    print(f"Total words: {dataset.TotalWords}")
+    print(f"Num Batches: {num_batches}\n")
 
     best_loss = float("inf")
     prev_model_file_path = None
@@ -168,16 +148,17 @@ def _run(data_file_name,
             else:
                 x = model.forward(batch.context_ids, batch.doc_ids, batch.target_noise_ids)
 
+            # calculate loss
             x = cost_func.forward(x)
-
             loss.append(x.item())
-            model.zero_grad()
             
             # backpropagation
+            model.zero_grad()
             x.backward()
             optimizer.step()
             
-            _print_progress(epoch_i, batch_i, num_batches)
+            if batch_i % 100 == 0:
+                _print_progress(epoch_i, batch_i, num_batches)
 
         # end of epoch
         loss = torch.mean(torch.FloatTensor(loss))
@@ -192,22 +173,11 @@ def _run(data_file_name,
         }
 
         prev_model_file_path = save_training_state(
-            data_file_name,
-            model_ver,
-            vec_combine_method,
-            context_size,
-            num_noise_words,
-            vec_dim,
-            batch_size,
-            lr,
-            epoch_i,
-            loss,
-            state,
-            save_all,
-            generate_plot,
-            is_best_loss,
-            prev_model_file_path,
-            model_ver_is_dbow)
+            data_file_name, model_ver, vec_combine_method, context_size,
+            num_noise_words, vec_dim, batch_size, lr, epoch_i, loss, state,
+            save_all, generate_plot, is_best_loss, prev_model_file_path,
+            model_ver_is_dbow
+        )
 
         epoch_total_time = round(time.time() - epoch_start_time)
         print(" ({:d}s) - loss: {:.4f}".format(epoch_total_time, loss))
