@@ -22,8 +22,8 @@ class NegativeSampling(nn.Module):
             row is the ground truth score (i.e. the target), other elements
             are scores of samples from the noise distribution.
         """
-        
         k = scores.size()[1] - 1
+
         return -torch.sum(
             self._log_sigmoid(scores[:, 0])
             + torch.sum(self._log_sigmoid(-scores[:, 1:]), dim=1) / k
