@@ -1,14 +1,14 @@
-import multiprocessing
 import os
 import re
+import csv
 import signal
+import multiprocessing
 from math import ceil
+from collections import Counter
 
 import numpy as np
 import torch
-
-import numpy as np
-from collections import Counter
+from torch.utils.data import IterableDataset
 from torch.utils.data import Dataset
 
 from paragraphvec.utils import DATA_DIR
