@@ -66,8 +66,8 @@ def LoadDataset(file_name:str):
     """Loads contents from a file in the *data* directory into a
     torchtext.data.TabularDataset instance.
     """
-    file_path = os.path.join(DATA_DIR, file_name)
-    dataset = CustomDataset(file_path)
+    # file_path = os.path.join(DATA_DIR, file_name)
+    dataset = CustomDataset(file_name)
 
     return dataset
 
@@ -87,8 +87,8 @@ def Tokenize(line="") -> list[str]:
     txt = re.sub(r'\(', ' ( ', txt)
     txt = re.sub(r'\)', ' ) ', txt)
     txt = re.sub(r',', ' , ', txt)
-    txt = re.sub(r'\.', ' . ', txt)
-    txt = re.sub(r'!', ' ! ', txt)
+    # txt = re.sub(r'\.', ' . ', txt)
+    # txt = re.sub(r'!', ' ! ', txt)
     txt = re.sub(r'\?', ' ? ', txt)
     
     # split contractions into multiple tokens
