@@ -8,6 +8,7 @@ _root_dir = dirname(dirname(__file__))
 
 DATA_DIR = join(_root_dir, 'data')
 MODELS_DIR = join(_root_dir, 'models')
+EXT_MODELS_DIR = join(_root_dir, '../models')
 _DIAGNOSTICS_DIR = join(_root_dir, 'diagnostics')
 
 _DM_MODEL_NAME = ("{:s}_model.{:s}.{:s}_contextsize.{:d}_numnoisewords.{:d}"
@@ -112,15 +113,20 @@ def save_training_state(data_file_name,
             loss)
 
     model_file_path = join(MODELS_DIR, model_file_name)
+    py_file_path = join(EXT_MODELS_DIR, "docvec.pt")
+
+    py_state_dict = {k: v for k, v in model_state['model_state_dict'].items()}
 
     if save_all:
         torch.save(model_state, model_file_path)
+        torch.save(py_state_dict, py_file_path)
         return None
     elif is_best_loss:
         if prev_model_file_path is not None:
             remove(prev_model_file_path)
 
         torch.save(model_state, model_file_path)
+        torch.save(py_state_dict, py_file_path)
         return model_file_path
     else:
         return prev_model_file_path

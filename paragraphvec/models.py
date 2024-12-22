@@ -1,6 +1,8 @@
+import random
+
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 
 class DM(nn.Module):
     """Distributed Memory version of Paragraph Vectors.
@@ -117,3 +119,63 @@ class DBOW(nn.Module):
 
     def get_paragraph_vector(self, index):
         return self._D[index, :].data.tolist()
+
+    def infer_vec(model, target_noise_ids, lossfn, num_epochs=100, lr=0.1):
+        """
+        Infer a paragraph vector for an unseen document using the trained DBOW model.
+        
+        Parameters
+        ----------
+        model: DBOW
+            Trained DBOW model whose output layer will be used.
+        target_noise_ids: list
+            List of target word and noise ids.
+        lossfn: function
+            Loss function to use.
+        num_epochs: int
+            Number of training iterations.
+        lr: float
+            Learning rate for optimization.
+            
+        Returns
+        -------
+        (torch.Tensor, float)
+            Inferred paragraph vector for the document with the best loss.
+        """
+        # Initialize a new paragraph vector randomly
+        vec_dim = model._O.shape[0]
+        paragraph_vec = nn.Parameter(
+            torch.randn(1, vec_dim).cuda(), requires_grad=True
+        )
+        
+        # Create optimizer for the paragraph vector
+        optimizer = torch.optim.Adam([paragraph_vec], lr=lr)
+        
+        # Convert word_ids to tensor
+        target_noise_ids = torch.Tensor(target_noise_ids)
+
+        best_loss = torch.Tensor([100000000000])
+        
+        # Training loop
+        # model.eval()  # Set model to evaluation mode
+        for epoch in range(num_epochs):
+            optimizer.zero_grad()
+            
+            # Compute scores using the same forward computation as DBOW
+            scores = torch.matmul(
+                paragraph_vec.unsqueeze(1),
+                model._O[:, target_noise_ids].permute(1, 0, 2)
+            ).squeeze()
+            
+            # Compute negative sampling loss
+            loss = lossfn(scores)
+
+            if loss.item() < best_loss.item():
+                best_loss = loss
+            
+            # Backward pass and optimization
+            loss.backward()
+            optimizer.step()
+        
+        # model.train()
+        return (paragraph_vec.data[0], best_loss)

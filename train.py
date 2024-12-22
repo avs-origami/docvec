@@ -12,18 +12,19 @@ from paragraphvec.utils import save_training_state
 
 
 def start(data_file_name="",
+        eval_data_file_name="",
         num_noise_words=1,
         vec_dim=10,
         num_epochs=5,
         batch_size=8,
         lr=1e-3,
-        model_ver='dm',
-        context_size=2,
+        model_ver='dbow',
+        context_size=0,
         vec_combine_method='concat',
         save_all=False,
         generate_plot=True,
         max_generated_batches=5,
-        num_workers=1
+        num_workers=-1
     ):
     """Trains a new model. The latest checkpoint and the best performing
     model are saved in the *models* directory.
@@ -32,6 +33,9 @@ def start(data_file_name="",
     ----------
     data_file_name: str
         Name of a file in the *data* directory.
+
+    eval_data_file_name: str
+        Name of a file in the *data* directory to use for eval.
 
     model_ver: str, one of ('dm', 'dbow'), default='dbow'
         Version of the model as proposed by Q. V. Le et al., Distributed
@@ -75,7 +79,7 @@ def start(data_file_name="",
     max_generated_batches: int, default=5
         Maximum number of pre-generated batches.
 
-    num_workers: int, default=1
+    num_workers: int, default=-1
         Number of batch generator jobs to run in parallel. If value is set
         to -1 number of machine cores are used.
     """
@@ -83,7 +87,7 @@ def start(data_file_name="",
     if model_ver not in ('dm', 'dbow'):
         raise ValueError("Invalid version of the model")
 
-    model_ver_is_dbow = model_ver == 'dbow'
+    model_ver_is_dbow = (model_ver == 'dbow')
     if model_ver_is_dbow and context_size != 0:
         raise ValueError("Context size has to be zero when using dbow")
     
@@ -97,9 +101,14 @@ def start(data_file_name="",
     nce_data = NCEData(dataset, batch_size, context_size, num_noise_words, max_generated_batches, num_workers)
     nce_data.start()
 
+    eval_dataset = LoadDataset(eval_data_file_name)
+    eval_nce_data = NCEData(eval_dataset, batch_size, context_size, num_noise_words, max_generated_batches, num_workers)
+    eval_nce_data.start()
+
     try:
-        _run(data_file_name, dataset, nce_data.get_generator(), len(nce_data),
-             nce_data.vocabulary_size(), context_size, num_noise_words, vec_dim,
+        _run(data_file_name, dataset, nce_data.get_generator(), len(nce_data), nce_data.vocabulary_size(),
+             eval_data_file_name, eval_dataset, eval_nce_data.get_generator(), len(eval_nce_data), eval_nce_data.vocabulary_size(),
+             context_size, num_noise_words, vec_dim,
              num_epochs, batch_size, lr, model_ver, vec_combine_method,
              save_all, generate_plot, model_ver_is_dbow)
     except KeyboardInterrupt:
@@ -107,6 +116,7 @@ def start(data_file_name="",
 
 
 def _run(data_file_name, dataset, data_generator, num_batches, vocabulary_size,
+         eval_data_file_name, eval_dataset, eval_data_generator, eval_num_batches, eval_vocabulary_size,
          context_size, num_noise_words, vec_dim, num_epochs, batch_size, lr,
          model_ver, vec_combine_method, save_all, generate_plot, model_ver_is_dbow):
 
@@ -138,10 +148,14 @@ def _run(data_file_name, dataset, data_generator, num_batches, vocabulary_size,
     for epoch_i in range(num_epochs):
         epoch_start_time = time.time()
         loss = []
+        eval_loss = []
 
         for batch_i in range(num_batches):
             batch = next(data_generator)
             batch.to(device)
+
+            eval_batch = next(eval_data_generator)
+            eval_batch.to(device)
 
             if model_ver_is_dbow:
                 x = model.forward(batch.doc_ids, batch.target_noise_ids)
@@ -156,12 +170,17 @@ def _run(data_file_name, dataset, data_generator, num_batches, vocabulary_size,
             model.zero_grad()
             x.backward()
             optimizer.step()
+
+            # eval
+            _, el = model.infer_vec(eval_batch.target_noise_ids, cost_func.forward, num_epochs=10)
+            eval_loss.append(el.item())
             
             if batch_i % 100 == 0:
                 _print_progress(epoch_i, batch_i, num_batches)
 
         # end of epoch
         loss = torch.mean(torch.FloatTensor(loss))
+        eval_loss = torch.mean(torch.FloatTensor(eval_loss))
         is_best_loss = loss < best_loss
         best_loss = min(loss, best_loss)
 
@@ -180,7 +199,7 @@ def _run(data_file_name, dataset, data_generator, num_batches, vocabulary_size,
         )
 
         epoch_total_time = round(time.time() - epoch_start_time)
-        print(" ({:d}s) - loss: {:.4f}".format(epoch_total_time, loss))
+        print(" ({:d}s) - loss: {:.4f} - eval_loss: {:.4f}".format(epoch_total_time, loss, eval_loss))
 
 
 def _print_progress(epoch_i:int, batch_i:int, num_batches:int):
