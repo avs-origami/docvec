@@ -174,7 +174,7 @@ class DBOW(nn.Module):
                 best_loss = loss
             
             # Backward pass and optimization
-            (loss).backward()
+            loss.backward()
             optimizer.step()
         
         # model.train()

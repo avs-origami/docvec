@@ -5,7 +5,7 @@ import fire
 import torch
 from torch.optim import Adam
 
-from paragraphvec.data import CustomDataset, DBOWIterableDataset, LoadDataset, NCEBatch, create_dbow_dataloader
+from paragraphvec.data import LoadDataset, NCEData
 from paragraphvec.loss import NegativeSampling
 from paragraphvec.models import DM, DBOW
 from paragraphvec.utils import save_training_state
@@ -23,8 +23,8 @@ def start(data_file_name="",
         vec_combine_method='concat',
         save_all=False,
         generate_plot=True,
-        max_generated_batches=8,
-        num_workers=32
+        max_generated_batches=5,
+        num_workers=-1
     ):
     """Trains a new model. The latest checkpoint and the best performing
     model are saved in the *models* directory.
@@ -76,7 +76,7 @@ def start(data_file_name="",
         Indicates whether a diagnostic plot displaying loss value over
         epochs is generated after each epoch.
 
-    max_generated_batches: int, default=64
+    max_generated_batches: int, default=5
         Maximum number of pre-generated batches.
 
     num_workers: int, default=-1
@@ -98,13 +98,16 @@ def start(data_file_name="",
             raise ValueError("Context size must be positive when using dm")
 
     dataset = LoadDataset(data_file_name)
-    nce_data = create_dbow_dataloader(dataset, batch_size, num_noise_words, num_workers)
+    nce_data = NCEData(dataset, batch_size, context_size, num_noise_words, max_generated_batches, num_workers)
+    nce_data.start()
 
     eval_dataset = LoadDataset(eval_data_file_name)
-    eval_nce_data = create_dbow_dataloader(eval_dataset, batch_size, num_noise_words, num_workers)
+    eval_nce_data = NCEData(eval_dataset, batch_size, context_size, num_noise_words, max_generated_batches, num_workers)
+    eval_nce_data.start()
 
     try:
-        _run(dataset, nce_data, eval_dataset, eval_nce_data, data_file_name,
+        _run(data_file_name, dataset, nce_data.get_generator(), len(nce_data), nce_data.vocabulary_size(),
+             eval_data_file_name, eval_dataset, eval_nce_data.get_generator(), len(eval_nce_data), eval_nce_data.vocabulary_size(),
              context_size, num_noise_words, vec_dim,
              num_epochs, batch_size, lr, model_ver, vec_combine_method,
              save_all, generate_plot, model_ver_is_dbow)
@@ -112,14 +115,15 @@ def start(data_file_name="",
         nce_data.stop()
 
 
-def _run(dataset: CustomDataset, dataloader, eval_dataset: CustomDataset, eval_dataloader,
-         data_file_name, context_size, num_noise_words, vec_dim, num_epochs, batch_size, lr,
+def _run(data_file_name, dataset, data_generator, num_batches, vocabulary_size,
+         eval_data_file_name, eval_dataset, eval_data_generator, eval_num_batches, eval_vocabulary_size,
+         context_size, num_noise_words, vec_dim, num_epochs, batch_size, lr,
          model_ver, vec_combine_method, save_all, generate_plot, model_ver_is_dbow):
 
     if model_ver_is_dbow:
-        model = DBOW(vec_dim, num_docs=len(dataset), num_words=dataset.TotalWords)
+        model = DBOW(vec_dim, num_docs=len(dataset), num_words=vocabulary_size)
     else:
-        raise ValueError("Not using DBOW model!")
+        model = DM(vec_dim, num_docs=len(dataset), num_words=vocabulary_size)
 
     cost_func = NegativeSampling()
     optimizer = Adam(params=model.parameters(), lr=lr)
@@ -132,9 +136,9 @@ def _run(dataset: CustomDataset, dataloader, eval_dataset: CustomDataset, eval_d
         print("CPU training enabled.")
     
     print(f"Count of documents: {len(dataset)}.")
-    print(f"Unique words (vocab): {dataset.VocabSize}.")
+    print(f"Unique words (vocab): {vocabulary_size}.")
     print(f"Total words: {dataset.TotalWords}")
-    print(f"Num Batches: {len(dataloader)}\n")
+    print(f"Num Batches: {num_batches}\n")
 
     best_loss = float("inf")
     prev_model_file_path = None
@@ -144,13 +148,14 @@ def _run(dataset: CustomDataset, dataloader, eval_dataset: CustomDataset, eval_d
     for epoch_i in range(num_epochs):
         epoch_start_time = time.time()
         loss = []
+        eval_loss = []
 
-        for batch_i, batch in enumerate(dataloader):
-            batch = NCEBatch(batch)
+        for batch_i in range(num_batches):
+            batch = next(data_generator)
             batch.to(device)
 
-            if batch.doc_ids.shape[0] != batch_size:
-                continue
+            eval_batch = next(eval_data_generator)
+            eval_batch.to(device)
 
             if model_ver_is_dbow:
                 x = model.forward(batch.doc_ids, batch.target_noise_ids)
@@ -165,20 +170,19 @@ def _run(dataset: CustomDataset, dataloader, eval_dataset: CustomDataset, eval_d
             model.zero_grad()
             x.backward()
             optimizer.step()
+
+            # eval
+            _, el = model.infer_vec(eval_batch.target_noise_ids, cost_func.forward, num_epochs=10)
+            eval_loss.append(el.item())
             
             if batch_i % 100 == 0:
-                _print_progress(epoch_i, batch_i, len(dataloader))
+                _print_progress(epoch_i, batch_i, num_batches)
 
         # end of epoch
         loss = torch.mean(torch.FloatTensor(loss))
+        eval_loss = torch.mean(torch.FloatTensor(eval_loss))
         is_best_loss = loss < best_loss
         best_loss = min(loss, best_loss)
-
-        # eval
-        eval_batch = next(iter(eval_dataloader))
-        eval_batch = NCEBatch(eval_batch)
-        eval_batch.to(device)
-        _, el = model.infer_vec(eval_batch.target_noise_ids, cost_func.forward, num_epochs=100)
 
         state = {
             'epoch': epoch_i + 1,
@@ -195,7 +199,7 @@ def _run(dataset: CustomDataset, dataloader, eval_dataset: CustomDataset, eval_d
         )
 
         epoch_total_time = round(time.time() - epoch_start_time)
-        print(" ({:d}s) - loss: {:.4f} - eval_loss: {:.4f}".format(epoch_total_time, loss, el.item()))
+        print(" ({:d}s) - loss: {:.4f} - eval_loss: {:.4f}".format(epoch_total_time, loss, eval_loss))
 
 
 def _print_progress(epoch_i:int, batch_i:int, num_batches:int):
