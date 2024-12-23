@@ -17,16 +17,14 @@ _DM_MODEL_NAME = ("{:s}_model.{:s}.{:s}_contextsize.{:d}_numnoisewords.{:d}"
 _DM_DIAGNOSTIC_FILE_NAME = ("{:s}_model.{:s}.{:s}_contextsize.{:d}"
                             "_numnoisewords.{:d}_vecdim.{:d}_batchsize.{:d}"
                             "_lr.{:f}.csv")
-_DBOW_MODEL_NAME = ("{:s}_model.{:s}_numnoisewords.{:d}_vecdim.{:d}"
+_DBOW_MODEL_NAME = ("{:s}_numnoisewords.{:d}_vecdim.{:d}"
                     "_batchsize.{:d}_lr.{:f}_epoch.{:d}_loss.{:f}.pth.tar")
-_DBOW_DIAGNOSTIC_FILE_NAME = ("{:s}_model.{:s}_numnoisewords.{:d}_vecdim.{:d}"
+_DBOW_DIAGNOSTIC_FILE_NAME = ("{:s}_numnoisewords.{:d}_vecdim.{:d}"
                               "_batchsize.{:d}_lr.{:f}.csv")
 
 
 def save_training_state(data_file_name,
-                        model_ver,
                         vec_combine_method,
-                        context_size,
                         num_noise_words,
                         vec_dim,
                         batch_size,
@@ -37,8 +35,7 @@ def save_training_state(data_file_name,
                         save_all,
                         generate_plot,
                         is_best_loss,
-                        prev_model_file_path,
-                        model_ver_is_dbow):
+                        prev_model_file_path):
     """Saves the state of the model. If generate_plot is True, it also
     saves current epoch's loss value and generates a plot of all loss
     values up to this epoch.
@@ -49,24 +46,12 @@ def save_training_state(data_file_name,
     """
     if generate_plot:
         # save the loss value for a diagnostic plot
-        if model_ver_is_dbow:
-            diagnostic_file_name = _DBOW_DIAGNOSTIC_FILE_NAME.format(
-                data_file_name[:-4],
-                model_ver,
-                num_noise_words,
-                vec_dim,
-                batch_size,
-                lr)
-        else:
-            diagnostic_file_name = _DM_DIAGNOSTIC_FILE_NAME.format(
-                data_file_name[:-4],
-                model_ver,
-                vec_combine_method,
-                context_size,
-                num_noise_words,
-                vec_dim,
-                batch_size,
-                lr)
+        diagnostic_file_name = _DBOW_DIAGNOSTIC_FILE_NAME.format(
+            data_file_name[:-4],
+            num_noise_words,
+            vec_dim,
+            batch_size,
+            lr)
 
         diagnostic_file_path = join(_DIAGNOSTICS_DIR, diagnostic_file_name)
 
@@ -89,28 +74,14 @@ def save_training_state(data_file_name,
         plt.close()
 
     # save the model
-    if model_ver_is_dbow:
-        model_file_name = _DBOW_MODEL_NAME.format(
-            data_file_name[:-4],
-            model_ver,
-            num_noise_words,
-            vec_dim,
-            batch_size,
-            lr,
-            epoch_i + 1,
-            loss)
-    else:
-        model_file_name = _DM_MODEL_NAME.format(
-            data_file_name[:-4],
-            model_ver,
-            vec_combine_method,
-            context_size,
-            num_noise_words,
-            vec_dim,
-            batch_size,
-            lr,
-            epoch_i + 1,
-            loss)
+    model_file_name = _DBOW_MODEL_NAME.format(
+        data_file_name[:-4],
+        num_noise_words,
+        vec_dim,
+        batch_size,
+        lr,
+        epoch_i + 1,
+        loss)
 
     model_file_path = join(MODELS_DIR, model_file_name)
     py_file_path = join(EXT_MODELS_DIR, "docvec.pt")
